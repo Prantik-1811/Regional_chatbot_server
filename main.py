@@ -191,3 +191,14 @@ async def dialogflow_webhook(req: Request):
     answer = llm_like_response(query_text, evidence)
 
     return {"fulfillmentText": answer}
+
+
+@app.on_event("startup")
+def preload_model():
+    # Preload model in background so first user doesn't wait
+    try:
+        load_llm()
+        print("🔥 Model preloaded successfully")
+    except Exception as e:
+        print("⚠️ Model preload failed (will lazy load on demand)", e)
+
