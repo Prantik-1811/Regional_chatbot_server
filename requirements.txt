@@ -3,4 +3,4 @@ uvicorn
 requests
 beautifulsoup4
 transformers==4.36.2
-torch==2.0.1
+torch
