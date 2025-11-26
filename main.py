@@ -31,13 +31,18 @@ STOPWORDS = {
     "be", "can", "will", "you", "your", "their", "they", "we", "our"
 }
 
-# ---------- 2. LOAD SMALL LLM (FLAN-T5-SMALL) ----------
+# ---------- 2. LLM LAZY LOAD ----------
 
-# You can change to "google/flan-t5-base" later if your instance has more RAM.
-MODEL_NAME = "google/flan-t5-small"
+tokenizer = None
+model = None
 
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_NAME)
+def load_llm():
+    global tokenizer, model
+    if tokenizer is None or model is None:
+        MODEL_NAME = "google/flan-t5-small"
+        print("📌 Loading FLAN-T5-Small model... (lazy load)")
+        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+        model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_NAME)
 
 
 # ---------- 3. TEXT UTILITIES ----------
@@ -136,39 +141,36 @@ def retrieve_evidence(query: str, region_hint: Optional[str]) -> List[str]:
 # ---------- 5. LLM-LIKE ANSWER GENERATION ----------
 
 def llm_like_response(query: str, evidence_sentences: List[str]) -> str:
+    load_llm()  # <-- important lazy load
+
     if not evidence_sentences:
         # hybrid behaviour: honest + mild guidance
         return (
-            "The official Hong Kong Cyber Security Information Portal, "
-            "Japan's NICT/NOTICE initiative, and NYC Cyber Command portals "
-            "do not clearly explain this specific topic in the material I can access. "
-            "However, across these sites they consistently emphasise cyber hygiene "
-            "such as keeping systems updated, using strong authentication, "
-            "monitoring for threats, and following official guidance from trusted "
-            "government sources when dealing with security incidents."
+            "The official Hong Kong, NICT Japan, and NYC Cyber Command portals "
+            "do not provide a detailed explanation of this specific topic. "
+            "However, they emphasize strong cyber hygiene: updating systems, "
+            "using secure authentication, monitoring threats, and following official "
+            "government guidance to manage incidents safely."
         )
 
     context = " ".join(evidence_sentences)
-    # keep context reasonably small for the model
     if len(context) > 2000:
         context = context[:2000]
 
     prompt = (
-        "You are a cybersecurity assistant. Answer the user's question using "
-        "only the information provided in the 'Information' section. "
-        "You may generalise slightly, but do not invent specific facts that "
-        "are not implied by the information. Be clear and concise.\n\n"
+        "You are a cybersecurity assistant. Answer using only the information "
+        "in the 'Information' section. You may generalize slightly, but do not "
+        "invent specific facts that are not implied.\n\n"
         f"Question: {query}\n\n"
         f"Information: {context}\n\n"
-        "Answer:"
+        "Answer clearly and concisely:"
     )
 
     inputs = tokenizer(prompt, return_tensors="pt", truncation=True)
     outputs = model.generate(
         **inputs,
-        max_new_tokens=160,
-        do_sample=False,
-        num_beams=4,
+        max_new_tokens=120,
+        num_beams=2
     )
     answer = tokenizer.decode(outputs[0], skip_special_tokens=True)
     return answer
