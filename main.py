@@ -2,83 +2,82 @@ from fastapi import FastAPI, Request
 import requests
 from bs4 import BeautifulSoup
 import re
-from transformers import pipeline
+from collections import Counter
+from typing import List
 
 app = FastAPI()
 
-ALLOWED_SITES = {
-    "hongkong": [
-        "https://www.cybersecurity.hk/en/about.php",
-        "https://www.cybersecurity.hk/en/safety-centre.php",
-        "https://www.cybersecurity.hk/en/learning-centre.php",
-    ],
-    "japan": [
-        "https://nco.nict.go.jp/en/",
-    ],
-    "nyc": [
-        "https://www.nyc.gov/site/em/ready/cybersecurity.page",
-    ],
-}
+# ---------- Data Sources ----------
+SOURCES = [
+    "https://www.cybersecurity.hk/en/about.php",
+    "https://www.cybersecurity.hk/en/safety-centre.php",
+    "https://www.cybersecurity.hk/en/learning-centre.php",
+    "https://nco.nict.go.jp/en/",
+    "https://www.nyc.gov/site/em/ready/cybersecurity.page"
+]
 
-summarizer = None
+STOPWORDS = set("""
+the is are was were a an of to in on for with this that from by as be can will and your their you our they we it
+""".split())
 
-def load_summarizer():
-    global summarizer
-    if summarizer is None:
-        summarizer = pipeline("summarization", model="philschmid/distilbart-cnn-6-6")
 
-STOPWORDS = {
-    "the", "is", "am", "are", "a", "an", "of", "and", "or", "to", "in",
-    "on", "for", "with", "this", "that", "it", "as", "by", "from",
-    "be", "can", "will", "you", "your", "their", "they", "we", "our"
-}
-
-def fetch_visible_text(url: str) -> str:
+# ---------- 1. Fetch text ----------
+def fetch_text(url: str) -> str:
     try:
-        resp = requests.get(url, timeout=18)
-        resp.raise_for_status()
-    except Exception:
+        r = requests.get(url, timeout=12)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "html.parser")
+        for bad in soup(["script", "style", "noscript"]):
+            bad.decompose()
+        text = " ".join(soup.stripped_strings)
+        return text
+    except:
         return ""
-    soup = BeautifulSoup(resp.text, "html.parser")
-    for tag in soup(["script", "style", "noscript"]):
-        tag.decompose()
-    return " ".join(soup.stripped_strings)
 
-def clean_sentences(text: str):
-    raw = re.split(r"(?<=[.!?])\s+", text)
-    return [s for s in raw if len(s) > 50]
 
+# ---------- 2. Sentence Split ----------
+def split_sentences(text: str) -> List[str]:
+    parts = re.split(r'(?<=[.!?])\s+', text)
+    return [p.strip() for p in parts if len(p.strip()) > 40]
+
+
+# ---------- 3. Keyword Score ----------
+def keywords(text: str) -> List[str]:
+    return [w.lower() for w in re.findall(r"[a-zA-Z]+", text) if w.lower() not in STOPWORDS]
+
+
+def score(query: str, sentence: str) -> int:
+    q = keywords(query)
+    s = Counter(keywords(sentence))
+    return sum(s[word] for word in q)
+
+
+# ---------- 4. Generate Answer ----------
+def build_answer(query: str, top_sentences: List[str]) -> str:
+    if not top_sentences:
+        return ("Based on the official cybersecurity information from Hong Kong, "
+                "Japan and New York City, organisations are advised to maintain "
+                "strong cyber hygiene, update systems, use strong authentication "
+                "and follow official government security guidance.")
+
+    joined = " ".join(top_sentences[:3])
+    return f"{joined} \n\n(Information derived from HK CSIP, Japan NICT and NYC Cyber Command official sites.)"
+
+
+# ---------- 5. Webhook ----------
 @app.post("/webhook")
 async def webhook(req: Request):
     data = await req.json()
     query = data.get("queryResult", {}).get("queryText", "")
     if not query:
-        return {"fulfillmentText": "No query text received."}
+        return {"fulfillmentText": "No query provided."}
 
-    load_summarizer()
+    corpus = ""
+    for url in SOURCES:
+        corpus += fetch_text(url) + " "
 
-    combined_text = ""
-    for urls in ALLOWED_SITES.values():
-        for url in urls:
-            combined_text += fetch_visible_text(url) + " "
+    sentences = split_sentences(corpus)
+    scored = sorted(sentences, key=lambda s: score(query, s), reverse=True)
 
-    if not combined_text:
-        return {"fulfillmentText": "No information found from the registered sources."}
-
-    sentences = clean_sentences(combined_text)
-    text_block = " ".join(sentences[:20])
-
-    summary = summarizer(text_block, max_length=130, min_length=40, do_sample=False)[0]["summary_text"]
-
-    final_answer = f"{summary}\n\n(Answer generated based on HK CSIP, Japan NICT, and NYC Cyber Command data.)"
-
-    return {"fulfillmentText": final_answer}
-
-
-@app.on_event("startup")
-def preload():
-    try:
-        load_summarizer()
-        print("🔥 Summarizer loaded.")
-    except:
-        print("⚠️ Summarizer lazy load only.")
+    answer = build_answer(query, scored[:5])
+    return {"fulfillmentText": answer}
