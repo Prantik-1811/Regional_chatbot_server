@@ -87,9 +87,11 @@ def build_answer(query: str, top_sentences: List[str]) -> str:
 @app.post("/webhook")
 async def webhook(req: Request):
     data = await req.json()
-    query = data.get("queryResult", {}).get("queryText", "")
-    if not query:
-        return {"fulfillmentText": "No query provided."}
+
+    try:
+        query = data["queryResult"]["queryText"]
+    except:
+        return {"fulfillmentText": "Couldn't understand your request."}
 
     corpus = ""
     for url in SOURCES:
